@@ -1,0 +1,187 @@
+---
+title: "Predicting Life Expectancy of various countries: A Predictive Model Building using Linear Regression"
+author: "Agniva Konar Archita Biswas Shrestha De Tannishtha Sen"
+date: "02/11/2021"
+output: html_document
+---
+ Including necessary packages
+```{r Including necessary packages, echo=TRUE, message=FALSE, warning=FALSE}
+library(readxl)
+library(qpcR)
+library(car)
+library(carData)
+library(nlme)
+library(lmtest)
+library(BSDA)
+library(MASS)
+library(ROCR)
+library(rmarkdown)
+library(pls)
+library(psych)
+library(Metrics)
+```
+
+Importing the dataset and dropping unnecessary columns.
+
+```{r echo=TRUE, warning=FALSE}
+dataset <- read_excel(file.choose())   
+df=dataset[,-c(1,2,3,4,5,6,9,12,15,18,20,22,25,27,29,31,33,35)]   
+dim(df)
+```
+Now renaming all the covariates and the response. Then creating a dataframe "df1" using the 18 variables and the response.
+
+```{r echo=TRUE, warning=FALSE}
+y=df$`Life expectancy(new)` #response
+#covariates
+x1=df$`Adult Mortality(new)`
+x2=df$`infant deaths`
+x3=df$`Alcohol(new)`
+x4=df$`percentage expenditure`
+x5=df$`Hepatitis B(new)`
+x6=df$Measles
+x7=df$`BMI(new)`
+x8=df$`under-five deaths`
+x9=df$`Polio(new)`
+x10=df$`Total expenditure(new)`
+x11=df$`Diptheria(new)`
+x12=df$`HIV/AIDS`
+x13=df$`GDP(new)`
+x14=df$`population(new)`
+x15=df$`thinness 1-19 years(new)`
+x16=df$`thinness 5-9 years(new)`
+x17=df$`Income composition of resources(new)`
+x18=df$`Schooling(new)`
+
+df1 <- data.frame(y,x1,x2,x3,x4,x5,x6,x7,x8,x9,x10,x11,x12,x13,x14,x15,x16,x17,x18)
+
+```
+
+Next, splitting the dataset into two datasets "train" and "test". Train contains 75% of the original dataset and test contains rest of it. All kinds of data manipulation and model building is done on the "train" dataset.
+```{r echo=TRUE}
+set.seed(123)
+sample <- floor(0.75 * nrow(df1))      
+train_ind <- sample(seq_len(nrow(df1)), size = sample)
+train <- df1[train_ind, ]
+test <- df1[-train_ind, ]
+dim(train)
+dim(test)
+```
+
+Now a primary model is created , named "Life_model" using "train" dataset.
+```{r echo=TRUE}
+Life_model=lm(y~ x1+x2+x3+x4+x5+x6+x7+x8+x9+x10+x11+x12+x13+x14+x15+x16+x17+x18, data=train)
+summary(Life_model)
+```
+
+Adjusted r square of the created model is 0.8135 which suggests that our primary model is quite efficient. But this efficiency can be improved if we use a cleansed dataset.This can be done by removing the influential observations, outliers and high leverage values from the dataset.
+
+Now checking for influential observation, high leverage points and outliers in the dataset and we have to remove them tactically from the dataset.
+
+```{r echo=TRUE, message=FALSE, warning=FALSE}
+### cooks distance ###
+
+cook = cooks.distance(Life_model)
+c = cook[cook>(4/2203)]
+length(c)
+# Influential observations
+
+### Studentized residual###
+
+student = studres(Life_model)
+s = student[abs(student)>3]
+length(s)
+
+### high leverage ###
+
+hat = hatvalues(Life_model)
+h = hat[hat>(54/2203)]    
+length(h)
+
+influential=as.numeric(names(c)) #storing the indexes of the values that are IOs
+outliers=as.numeric(names(s)) #storing the indexes of the values that are outliers
+highleverage=as.numeric(names(h)) #storing the indexes of the values that are HLVs
+
+a=intersect(influential,outliers) #common values b/w IO and outliers
+b=intersect(outliers,highleverage) #common values b/w outliers and HLV
+c=intersect(highleverage,influential) #common values b/w HLV and IO
+d=intersect(influential,b) #common values in all three of them
+e=intersect(a,c) #common values
+
+newdata=train[-c(a,c),]
+dim(newdata)
+```
+We must keep in mind that data is very precious and losing a huge amount of data for the sake of data cleansing can prove to be disadvantageous. Hence, we remove some of the data impurities.
+
+Now, a new model based on the cleansed dataset is created.
+```{r echo=TRUE, message=FALSE}
+Life_model1=lm(y~ x1+x2+x3+x4+x5+x6+x7+x8+x9+x10+x11+x12+x13+x14+x15+x16+x17+x18, data=newdata)
+summary(Life_model1)
+```
+
+Adjusted R square of this model is 0.8144 which is a bit more than the last model, which indicates that using a cleansed dataset resulted in a more efficient model.
+
+Now, let's check for normality for this model using QQPlot.
+```{r echo=TRUE, message=FALSE}
+qqPlot(Life_model1$residuals)
+```
+We can observe that, the quantiles of this model, fits moderately with those of any normal sample. Hence, we can conclude that our model somewhat satisfies the condition of normality.
+
+Since, there isn't any time component present in our dataset, hence, we don't have to check for presence of autocorrelation using Durbin Watson test.
+
+Hence, we are moving onwards to check for homoscedasticity using Breusch Pagan test.
+```{r echo=TRUE, message=FALSE}
+bptest(Life_model1)
+```
+Breusch Pagan test fails, that means the data is not homoscadastic. We will have to opt for GLS technique in our final predictive model to solve this issue of heteroscedasticity.
+
+Let's check for the multicollinearity of the data using Variance Inflation Factor (VIF).
+```{r echo=TRUE}
+vif(Life_model1)
+```
+
+So from the above code it is clear that the covariates x2 and x8 have high multicollinearity.
+
+To get rid of the multicollinearity problem, PCA is performed on the train dataset which was last renamed as "newdata" after data cleansing.
+```{r echo=TRUE, message=FALSE, warning=FALSE}
+pc.fit <- prcomp(~x1+x2+x3+x4+x5+x6+x7+x8+x9+x10+x11+x12+x13+x14+x15+x16+x17+x18,data=newdata, scale=TRUE)
+summary(pc.fit)
+```
+From the output, we can conclude that 11 principal components explain the 90% variance of the data (evident from "Cumulative Proportion" of the attached output) which is quite satisfactory. Hence, we are going to reduce the dimensions of our model and we will continue working with just 11 principal components rather than using the 18 covariates.
+
+We need to create a new training and testing dataset by using the linear transformation of PCA on our previous training and testing datasets.
+```{r echo=TRUE, message=FALSE, warning=FALSE}
+trans_test <- as.data.frame(predict(pc.fit, test)[,1:11])
+new_train <- as.data.frame(cbind(newdata$y, pc.fit$x[,1:11]))
+colnames(new_train)[1]<- "Life.expectancy"
+
+pcr_lm_model <- lm(new_train$Life.expectancy~., data=new_train)
+summary(pcr_lm_model)
+```
+"trans_test" is the transformed test dataset with 11 principal components as covariates and "new_train" is the new dataset. This model has Adjusted R square value of 0.8049 which is quite satisfactory.
+
+Now, we have to check for normality assumption and homoscedasticity once again and take measures to fix those if necessary.
+```{r echo=TRUE}
+qqPlot(pcr_lm_model$residuals) # normality assumption is satisfied
+bptest(pcr_lm_model) # bptest fails. Need to opt for gls
+vif(pcr_lm_model) #issue of multicollinearity solved
+```
+From the QQPlot, we can say that our model fulfills the condition of normality but once again the test for homoscedasticity fails. We need to opt for GLS to solve this. The issue of multicollinearity is solved using PCA.
+```{r echo=TRUE}
+Life_model_gls = gls(Life.expectancy~., correlation = corAR1(), data=new_train)
+Life_model_gls
+Rsq.ad(Life_model_gls) 
+```
+
+GLS is applied to solve the problems of heteroscadasticity. After applying GLS the Adjusted r square becomes 0.8049 which says that our predictive model is quite efficient.
+
+"Life_model_gls" is our final predcitive model. Let's move on to predictions.
+
+```{r echo=TRUE}
+# Predicting the fitted model on test dataset
+pred1 <- predict(Life_model_gls, trans_test)
+plot(pred1, col="red", type="l", lwd=2, ylab="Life expectancy", main= "Prediction vs actual plot", ylim=c(0,90))
+lines(test$y, col="green", type="l", lwd="1")
+legend(x="bottomright", legend = c("Prediction","Actual"), col=c("red","green"), cex=1, lty = 1, lwd=3)
+```
+
+So from the graph it is clear that the prediction is quite satisfactory and our model fitting is moderate.
